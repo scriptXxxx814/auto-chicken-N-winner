@@ -1,0 +1,725 @@
+// ==UserScript==
+// @name         Auto Chicken Winner Mod
+// @namespace    http://tampermonkey.net/
+// @version      6.2
+// @description  Notifies when Chicken Winner is ready, auto-opens it, picks a random egg (1-3), clicks CLUCK YEAH after 5s, auto-wakes up to a limit, logs eggs and skins won, shows stats in a menu (press H) with Stats and Logs tabs
+// @match        *://shellshock.io/*
+// @match        *://*.shellshock.io/*
+// @match        *://shellshockers.*/*
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // ---- Settings ----
+    const MENU_KEY       = 'h';
+    const MAX_COST       = 10000;
+    const MAX_WAKES      = 100;
+    const COOLDOWN_MS    = 15000;
+    const OPEN_DELAY_MS  = 0;
+    const PICK_DELAY_MS  = 0;
+    const CLOSE_DELAY_MS = 4000;
+    const CLOSE_WINDOW_MS = 60000;
+    const CLOSE_TEXT     = 'cluck yeah';
+    const MAX_LOG        = 10000;
+    const DEBUG          = true;
+    // ------------------
+
+    const STORE_KEY  = 'chwStats_v2';
+    const LOG_KEY_LS = 'chwLog_v1';
+    const today = () => new Date().toISOString().slice(0, 10);
+
+    let lastReady = null, wakes = 0, lastClick = 0, lastCounter = null;
+    let lastOpen = 0, lastPick = 0, lastClose = 0, lastRewardSig = '';
+    const startedAt = Date.now();
+
+    const log = (...a) => DEBUG && console.log('[CHW Auto]', ...a);
+    const visible = (el) => el && el.offsetParent !== null;
+
+    // ================= STATS DATA =================
+    function load() {
+        let s = null;
+        try { s = JSON.parse(localStorage.getItem(STORE_KEY)); } catch (e) {}
+        if (!s) s = {};
+        if (s.day !== today()) {
+            s = { day: today(), plays: 0, won: 0, spent: 0, wakes: 0, skins: [],
+                  visible: false, chickenAuto: s.chickenAuto !== false, usedMs: 0 };
+        }
+        if (typeof s.usedMs !== 'number') s.usedMs = 0;
+        if (!Array.isArray(s.skins)) s.skins = [];
+        // migrate old per-toggle fields to single chickenAuto
+        if (typeof s.chickenAuto !== 'boolean') {
+            s.chickenAuto = (s.autoWake !== false && s.autoOpen !== false &&
+                             s.autoPick !== false && s.autoClose !== false);
+        }
+        // keep individual flags in sync with chickenAuto
+        s.autoWake = s.autoOpen = s.autoPick = s.autoClose = s.chickenAuto;
+        return s;
+    }
+    let stats = load();
+    stats.visible = false; // always start hidden on page load
+
+    function save() {
+        // keep individual flags in sync
+        stats.autoWake = stats.autoOpen = stats.autoPick = stats.autoClose = stats.chickenAuto;
+        try { localStorage.setItem(STORE_KEY, JSON.stringify(stats)); } catch (e) {}
+        renderMenu();
+    }
+
+    // ================= LOG DATA =================
+    function loadLog() {
+        try {
+            const r = JSON.parse(localStorage.getItem(LOG_KEY_LS));
+            if (Array.isArray(r)) return r;
+        } catch (e) {}
+        return [];
+    }
+    let rewardLog = loadLog().map(e => {
+        if (e.type === 'egg' && /^[+-]?\d+$/.test(e.label)) {
+            e.label = e.label + ' eggs';
+        }
+        return e;
+    });
+
+    function saveLog() {
+        if (rewardLog.length > MAX_LOG) rewardLog = rewardLog.slice(rewardLog.length - MAX_LOG);
+        try { localStorage.setItem(LOG_KEY_LS, JSON.stringify(rewardLog)); } catch (e) {}
+        renderLog();
+    }
+
+    function addLogEntry(label, type) {
+        rewardLog.push({ ts: Date.now(), label, type });
+        saveLog();
+    }
+
+    function fmtLogDate(ts) {
+        const d = new Date(ts);
+        const mo = String(d.getMonth() + 1).padStart(2, '0');
+        const dy = String(d.getDate()).padStart(2, '0');
+        const hh = d.getHours();
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ampm = hh >= 12 ? 'PM' : 'AM';
+        const h12  = String(hh % 12 || 12);
+        return mo + '/' + dy + ' ' + h12 + ':' + mm + ampm;
+    }
+
+    // ================= MENU =================
+    let menu      = null;
+    let tabStats  = null;
+    let tabLog    = null;
+    let paneStats = null;
+    let paneLog   = null;
+    let statsBody = null;
+    let logList   = null;
+
+    const TAB_ACTIVE   = 'padding:6px 0;flex:1;text-align:center;cursor:pointer;background:#fff;color:#2a9bcf;border-radius:8px;font:bold 13px sans-serif;border:none;outline:none;box-shadow:0 2px 6px rgba(0,0,0,0.15);transition:all .2s';
+    const TAB_INACTIVE = 'padding:6px 0;flex:1;text-align:center;cursor:pointer;background:transparent;color:#fff;border-radius:8px;font:bold 13px sans-serif;border:none;outline:none;box-shadow:none;transition:all .2s';
+
+    function switchTab(tab) {
+        paneStats.style.display = tab === 'stats' ? 'block' : 'none';
+        paneLog.style.display   = tab === 'log'   ? 'block' : 'none';
+        tabStats.style.cssText  = tab === 'stats' ? TAB_ACTIVE : TAB_INACTIVE;
+        tabLog.style.cssText    = tab === 'log'   ? TAB_ACTIVE : TAB_INACTIVE;
+        if (tab === 'log') renderLog();
+    }
+
+    function buildMenu() {
+        if (menu || !document.body) return;
+
+        menu = document.createElement('div');
+        menu.style.cssText = [
+            'position:fixed', 'top:90px', 'right:20px', 'z-index:2147483646',
+            'width:300px', 'border-radius:14px', 'overflow:hidden',
+            'background:#9fe3ff', 'color:#1b7ca8', 'border:4px solid #2a9bcf',
+            'font:bold 14px sans-serif', 'box-shadow:0 6px 22px rgba(0,0,0,.4)',
+            'user-select:none',
+            'transform:scale(0.67)', 'transform-origin:top right',
+            'will-change:transform,opacity'
+        ].join(';');
+
+        const head = document.createElement('div');
+        head.style.cssText = 'padding:8px 12px;background:#2a9bcf;color:#fff;text-align:center;font-size:15px;cursor:move;display:flex;align-items:center;justify-content:center;gap:8px';
+        const headIco = document.createElement('img');
+        headIco.id = 'chw-head-ico';
+        headIco.style.cssText = 'width:28px;height:28px;object-fit:contain;border-radius:50%;display:none';
+        const headTxt = document.createElement('span');
+        headTxt.textContent = 'Auto Chicken Winner Mod';
+        head.appendChild(headIco);
+        head.appendChild(headTxt);
+        menu.appendChild(head);
+
+        // Update the skin icon
+        function updateSkinIcon() {
+            try {
+                let found = false;
+                const canvases = Array.from(document.querySelectorAll('canvas'));
+                const previewCanvas = canvases.find(c => {
+                    const cl = (c.className || '').toLowerCase();
+                    const id = (c.id || '').toLowerCase();
+                    return /preview|skin|avatar|egg|player/.test(cl + id) && c.width > 0 && c.width < 300;
+                });
+                if (previewCanvas) {
+                    try {
+                        const url = previewCanvas.toDataURL();
+                        if (url && url !== 'data:,') {
+                            headIco.src = url;
+                            headIco.style.display = 'block';
+                            found = true;
+                        }
+                    } catch (e) {}
+                }
+                if (!found) {
+                    const wrappers = Array.from(document.querySelectorAll(
+                        '[class*="skin-preview"], [class*="skinPreview"], [class*="eggPreview"], ' +
+                        '[class*="egg-preview"], [class*="avatar"], [class*="player-icon"], [class*="playerIcon"]'
+                    ));
+                    for (const w of wrappers) {
+                        if (!visible(w)) continue;
+                        const imgs = w.querySelectorAll('img');
+                        if (imgs.length >= 1) {
+                            const size = 32;
+                            const c = document.createElement('canvas');
+                            c.width = size; c.height = size;
+                            const ctx = c.getContext('2d');
+                            let loaded = 0;
+                            const total = imgs.length;
+                            imgs.forEach(img => {
+                                const i = new Image();
+                                i.crossOrigin = 'anonymous';
+                                i.onload = () => {
+                                    ctx.drawImage(i, 0, 0, size, size);
+                                    if (++loaded === total) {
+                                        headIco.src = c.toDataURL();
+                                        headIco.style.display = 'block';
+                                    }
+                                };
+                                i.onerror = () => { ++loaded; };
+                                i.src = img.src;
+                            });
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    const skinImg = document.querySelector(
+                        'img[src*="skin"], img[src*="eggskin"], img[src*="egg-skin"], img[src*="eggSkin"]'
+                    );
+                    const hatImg = document.querySelector(
+                        'img[src*="hat"], img[src*="accessory"], img[src*="head"]'
+                    );
+                    if (skinImg) {
+                        if (hatImg) {
+                            const size = 32;
+                            const c = document.createElement('canvas');
+                            c.width = size; c.height = size;
+                            const ctx = c.getContext('2d');
+                            const s = new Image(); s.crossOrigin = 'anonymous';
+                            s.onload = () => {
+                                ctx.drawImage(s, 0, 0, size, size);
+                                const h = new Image(); h.crossOrigin = 'anonymous';
+                                h.onload = () => {
+                                    ctx.drawImage(h, 0, 0, size, size);
+                                    headIco.src = c.toDataURL();
+                                    headIco.style.display = 'block';
+                                };
+                                h.onerror = () => {
+                                    headIco.src = c.toDataURL();
+                                    headIco.style.display = 'block';
+                                };
+                                h.src = hatImg.src;
+                            };
+                            s.src = skinImg.src;
+                        } else {
+                            headIco.src = skinImg.src;
+                            headIco.style.display = 'block';
+                        }
+                    }
+                }
+            } catch (e) { log('Skin icon error:', e); }
+        }
+        const skinInterval = setInterval(updateSkinIcon, 3000);
+        updateSkinIcon();
+
+        const tabBar = document.createElement('div');
+        tabBar.style.cssText = 'display:flex;gap:4px;padding:6px 10px;background:#2a9bcf';
+        tabStats = document.createElement('button');
+        tabStats.textContent = 'Stats';
+        tabStats.style.cssText = TAB_ACTIVE;
+        tabLog = document.createElement('button');
+        tabLog.textContent = 'Logs';
+        tabLog.style.cssText = TAB_INACTIVE;
+        tabBar.appendChild(tabStats);
+        tabBar.appendChild(tabLog);
+        menu.appendChild(tabBar);
+        tabStats.onclick = () => switchTab('stats');
+        tabLog.onclick   = () => switchTab('log');
+
+        paneStats = document.createElement('div');
+        paneStats.style.display = 'block';
+
+        statsBody = document.createElement('div');
+        statsBody.style.cssText = 'padding:12px 14px;line-height:1.7';
+        paneStats.appendChild(statsBody);
+
+        // ---- Chicken Winner Settings dropdown ----
+        const settingsWrap = document.createElement('div');
+        settingsWrap.style.cssText = 'border-top:2px solid #2a9bcf';
+
+        const settingsToggle = document.createElement('div');
+        settingsToggle.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:9px 14px;cursor:pointer;background:#7dd4f0;color:#1b7ca8;font:bold 13px sans-serif;user-select:none';
+        settingsToggle.innerHTML = '<span>Chicken Winner Settings</span><span id="chw-arrow" style="font-size:11px;transition:transform 0.2s">▼</span>';
+
+        const settingsBody = document.createElement('div');
+        settingsBody.id = 'chw-settings-body';
+        settingsBody.style.cssText = 'display:none;padding:10px 14px 10px;background:#9fe3ff';
+
+        // toggle CSS
+        const style = document.createElement('style');
+        style.textContent = `
+            .chw-toggle-row {
+                display:flex;justify-content:space-between;align-items:center;
+                padding:6px 0;
+                font:bold 13px sans-serif;color:#1b7ca8;
+            }
+            .chw-switch { position:relative;width:40px;height:22px;flex-shrink:0; }
+            .chw-switch input { opacity:0;width:0;height:0;position:absolute; }
+            .chw-slider {
+                position:absolute;inset:0;border-radius:22px;
+                background:#b0d8ee;cursor:pointer;transition:background .2s;
+            }
+            .chw-slider:before {
+                content:'';position:absolute;width:16px;height:16px;border-radius:50%;
+                background:#fff;left:3px;top:3px;transition:transform .2s;
+                box-shadow:0 1px 3px rgba(0,0,0,.3);
+            }
+            .chw-switch input:checked + .chw-slider { background:#2a9bcf; }
+            .chw-switch input:checked + .chw-slider:before { transform:translateX(18px); }
+        `;
+        document.head.appendChild(style);
+
+        // Single "Chicken Auto" toggle
+        const row = document.createElement('div');
+        row.className = 'chw-toggle-row';
+        row.innerHTML =
+            '<span>Auto Chicken Winner</span>' +
+            '<label class="chw-switch">' +
+              '<input type="checkbox" id="chw-ca">' +
+              '<span class="chw-slider"></span>' +
+            '</label>';
+        row.querySelector('input').onchange = (e) => {
+            stats.chickenAuto = e.target.checked;
+            save();
+        };
+        settingsBody.appendChild(row);
+
+        let settingsOpen = false;
+        settingsToggle.addEventListener('click', () => {
+            settingsOpen = !settingsOpen;
+            settingsBody.style.display = settingsOpen ? 'block' : 'none';
+            const arrow = settingsToggle.querySelector('#chw-arrow');
+            if (arrow) arrow.style.transform = settingsOpen ? 'rotate(180deg)' : '';
+        });
+
+        settingsWrap.appendChild(settingsToggle);
+        settingsWrap.appendChild(settingsBody);
+        paneStats.appendChild(settingsWrap);
+
+        const foot = document.createElement('div');
+        foot.style.cssText = 'padding:8px 14px;text-align:center;border-top:2px solid #2a9bcf';
+        foot.innerHTML =
+            '<button id="chw-reset" style="cursor:pointer;border:2px solid #2a9bcf;background:#fff;color:#1b7ca8;border-radius:8px;font:bold 12px sans-serif;padding:3px 8px">Reset stats</button>' +
+            '<div style="font-weight:normal;font-size:12px;margin-top:5px">Press ' + MENU_KEY.toUpperCase() + ' to toggle</div>';
+        paneStats.appendChild(foot);
+        menu.appendChild(paneStats);
+
+        paneLog = document.createElement('div');
+        paneLog.style.cssText = 'display:none;flex-direction:column';
+
+        logList = document.createElement('div');
+        logList.style.cssText = 'max-height:300px;overflow-y:auto';
+        paneLog.appendChild(logList);
+
+        const logFoot = document.createElement('div');
+        logFoot.style.cssText = 'padding:8px 14px;text-align:center;font-size:12px;font-weight:normal;border-top:2px solid #2a9bcf';
+        logFoot.innerHTML = '<button id="chw-log-clear" style="cursor:pointer;border:2px solid #2a9bcf;background:#fff;color:#1b7ca8;border-radius:8px;font:bold 12px sans-serif;padding:3px 10px">Clear log</button>';
+        paneLog.appendChild(logFoot);
+        menu.appendChild(paneLog);
+
+        logFoot.querySelector('#chw-log-clear').onclick = () => { rewardLog = []; saveLog(); };
+
+        document.body.appendChild(menu);
+
+        // drag
+        let drag = null;
+        head.addEventListener('mousedown', (e) => {
+            const r = menu.getBoundingClientRect();
+            drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (!drag) return;
+            menu.style.left  = (e.clientX - drag.dx) + 'px';
+            menu.style.top   = (e.clientY - drag.dy) + 'px';
+            menu.style.right = 'auto';
+        });
+        document.addEventListener('mouseup', () => { drag = null; });
+    }
+
+    function fmtTime(ms) {
+        const m = Math.floor(ms / 60000);
+        const h = Math.floor(m / 60);
+        return h > 0 ? h + 'h ' + (m % 60) + 'm' : m + 'm';
+    }
+
+    function renderMenu() {
+        buildMenu();
+        if (!menu) return;
+        menu.style.display = stats.visible ? 'block' : 'none';
+        if (!stats.visible) return;
+
+        // sync single toggle
+        const ca = menu.querySelector('#chw-ca');
+        if (ca) ca.checked = !!stats.chickenAuto;
+
+        const rb = menu.querySelector('#chw-reset');
+        if (rb) rb.onclick = () => {
+            stats.plays = 0; stats.won = 0; stats.spent = 0;
+            stats.wakes = 0; stats.skins = []; stats.usedMs = 0;
+            save();
+        };
+
+        const used = stats.usedMs + (Date.now() - startedAt);
+        statsBody.innerHTML =
+            'Plays: '      + stats.plays + '<br>' +
+            'Eggs won: '   + stats.won   + '<br>' +
+            'Eggs spent: ' + stats.spent + ' (' + stats.wakes + ' wakes)<br>' +
+            'Time used: ' + fmtTime(used) +
+            (stats.skins.length ? '<br>Skins won: ' + stats.skins.join(', ') : '');
+    }
+
+    function renderLog() {
+        if (!logList) return;
+        logList.innerHTML = '';
+        const entries = rewardLog.slice().reverse();
+        if (!entries.length) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'padding:16px;text-align:center;color:#1b7ca8;font-weight:normal';
+            empty.textContent = 'No rewards logged yet.';
+            logList.appendChild(empty);
+            return;
+        }
+        entries.forEach((entry, i) => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;' +
+                'padding:10px 14px;background:' + (i % 2 === 0 ? '#9fe3ff' : '#b8ecff') + ';' +
+                'border-bottom:1px solid rgba(42,155,207,0.2)';
+            const left = document.createElement('span');
+            left.style.cssText = 'font-size:14px;font-weight:bold;color:#1b7ca8;display:flex;align-items:center;gap:5px';
+            if (entry.type === 'egg') {
+                const pageIco = document.querySelector(
+                    'img[src*="egg_icon"], img[src*="egg-icon"], img[src*="eggcoin"], ' +
+                    'img[src*="ico_egg"], img[src*="/egg."], img[class*="egg-icon"], ' +
+                    'img[class*="eggIcon"], img[class*="egg_icon"]'
+                );
+                const ico = document.createElement('img');
+                if (pageIco && pageIco.src) {
+                    ico.src = pageIco.src;
+                } else {
+                    const hudEgg = document.querySelector('#ss-hud img, .egg-count img, [class*="currency"] img');
+                    ico.src = hudEgg ? hudEgg.src : '';
+                }
+                ico.style.cssText = 'width:18px;height:18px;object-fit:contain;vertical-align:middle;flex-shrink:0';
+                ico.onerror = () => { ico.style.display = 'none'; };
+                if (ico.src) left.appendChild(ico);
+                else {
+                    const span = document.createElement('span');
+                    span.textContent = '🥚';
+                    span.style.fontSize = '15px';
+                    left.appendChild(span);
+                }
+            } else if (entry.type === 'skin') {
+                let icoEl = null;
+                try {
+                    if (window.extern && window.extern.catalog) {
+                        const items = window.extern.catalog.items || window.extern.catalog._items || [];
+                        const match = Array.from(items).find(it => {
+                            const n = it.name || it.item_name || it.itemName || it.title || '';
+                            return n === entry.label;
+                        });
+                        if (match) {
+                            const imgUrl = match.imgUrl || match.img_url || match.imageUrl || match.icon || match.thumbnail;
+                            if (imgUrl) {
+                                icoEl = document.createElement('img');
+                                icoEl.src = imgUrl;
+                                icoEl.style.cssText = 'width:20px;height:20px;object-fit:contain;flex-shrink:0;border-radius:3px';
+                                icoEl.onerror = () => { icoEl.style.display = 'none'; };
+                            }
+                        }
+                    }
+                } catch (e) {}
+                if (!icoEl) {
+                    icoEl = document.createElement('span');
+                    icoEl.textContent = '🎩';
+                    icoEl.style.fontSize = '15px';
+                }
+                left.appendChild(icoEl);
+            }
+            const txt = document.createElement('span');
+            txt.textContent = entry.label;
+            left.appendChild(txt);
+            const right = document.createElement('span');
+            right.style.cssText = 'font-size:13px;font-weight:bold;color:#1b7ca8;white-space:nowrap;margin-left:10px';
+            right.textContent = fmtLogDate(entry.ts);
+            row.appendChild(left);
+            row.appendChild(right);
+            logList.appendChild(row);
+        });
+    }
+
+    // H key toggles the menu
+    document.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() !== MENU_KEY) return;
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        stats.visible = !stats.visible;
+        save();
+    });
+
+    // ================= TRACKING =================
+    setInterval(() => {
+        if (stats.day !== today()) { stats = load(); }
+        const app = window.vueApp;
+        if (app && app.chw) {
+            const c = app.chw.winnerCounter;
+            if (typeof c === 'number') {
+                if (lastCounter !== null && c > lastCounter) { stats.plays += (c - lastCounter); save(); }
+                lastCounter = c;
+            }
+        }
+        renderMenu();
+    }, 1000);
+
+    window.addEventListener('beforeunload', () => {
+        stats.usedMs += Date.now() - startedAt;
+        try { localStorage.setItem(STORE_KEY, JSON.stringify(stats)); } catch (e) {}
+    });
+
+    // ================= REWARD LOGGER =================
+    function nameForItem(id) {
+        try {
+            const item = window.extern.catalog.findItemById(id);
+            if (item) {
+                const n = item.name || item.item_name || item.itemName || item.title;
+                if (n) return n;
+                log('Item found but no name field:', id, item);
+            } else { log('No catalog item for id', id); }
+        } catch (e) { log('Catalog lookup failed for id', id, e); }
+        return 'Item #' + id;
+    }
+
+    setInterval(() => {
+        const app = window.vueApp;
+        if (!app || !app.chw || !app.chw.reward) return;
+        const r = app.chw.reward;
+        const ids  = Array.isArray(r.itemIds) ? r.itemIds.slice() : [];
+        const eggs = typeof r.eggs === 'number' ? r.eggs : 0;
+        if (!ids.length && !eggs) { lastRewardSig = ''; return; }
+        const sig = eggs + '|' + ids.join(',');
+        if (sig === lastRewardSig) return;
+        lastRewardSig = sig;
+        log('Reward:', JSON.parse(JSON.stringify(r)));
+        if (eggs) { stats.won += eggs; addLogEntry((eggs > 0 ? '+' : '') + eggs + ' eggs', 'egg'); }
+        ids.forEach((id) => { const name = nameForItem(id); stats.skins.push(name); addLogEntry(name, 'skin'); });
+        save();
+    }, 200);
+
+    // ================= NOTIFIER =================
+    document.addEventListener('click', () => {
+        if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    }, { once: true });
+
+    function beep() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            [880, 1175].forEach((freq, i) => {
+                const osc = ctx.createOscillator(), gain = ctx.createGain();
+                osc.frequency.value = freq;
+                osc.connect(gain); gain.connect(ctx.destination);
+                gain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.2);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.2 + 0.18);
+                osc.start(ctx.currentTime + i * 0.2);
+                osc.stop(ctx.currentTime + i * 0.2 + 0.2);
+            });
+        } catch (e) {}
+    }
+
+    function toast(text) {
+        // inject keyframes once
+        if (!document.getElementById('chw-toast-style')) {
+            const s = document.createElement('style');
+            s.id = 'chw-toast-style';
+            s.textContent = `
+                @keyframes chw-slidein {
+                    0%   { opacity:0; transform:translateX(-50%) translateY(-40px) scale(0.85); }
+                    60%  { transform:translateX(-50%) translateY(6px) scale(1.03); }
+                    100% { opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
+                }
+                @keyframes chw-pulse {
+                    0%,100% { box-shadow:0 0 18px 4px rgba(42,155,207,0.5), 0 6px 22px rgba(0,0,0,.35); }
+                    50%     { box-shadow:0 0 32px 10px rgba(42,155,207,0.85), 0 6px 22px rgba(0,0,0,.35); }
+                }
+                @keyframes chw-fadeout {
+                    0%   { opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
+                    100% { opacity:0; transform:translateX(-50%) translateY(-20px) scale(0.9); }
+                }
+                .chw-toast {
+                    position:fixed; top:30px; left:50%; z-index:2147483647;
+                    padding:9px 20px; border-radius:12px;
+                    background:linear-gradient(135deg,#1b7ca8 0%,#2a9bcf 50%,#50c8f0 100%);
+                    color:#fff; border:2px solid rgba(255,255,255,0.35);
+                    font:bold 14px sans-serif; text-align:center; white-space:nowrap;
+                    cursor:pointer; letter-spacing:0.5px;
+                    text-shadow:0 1px 4px rgba(0,0,0,0.3);
+                    animation: chw-slidein 0.45s cubic-bezier(.22,.68,0,1.4) forwards,
+                               chw-pulse 1.6s ease-in-out 0.5s infinite;
+                }
+                .chw-toast.hide {
+                    animation: chw-fadeout 0.5s ease forwards !important;
+                }
+                .chw-toast-icon {
+                    display:block; font-size:28px; margin-bottom:4px;
+                    animation: chw-pulse 1s ease-in-out infinite;
+                }
+
+            `;
+            document.head.appendChild(s);
+        }
+
+        const el = document.createElement('div');
+        el.className = 'chw-toast';
+        el.innerHTML = text;
+        el.onclick = () => {
+            el.classList.add('hide');
+            setTimeout(() => el.remove(), 500);
+        };
+        document.body.appendChild(el);
+        setTimeout(() => { el.classList.add('hide'); }, 5000);
+        setTimeout(() => el.remove(), 5600);
+    }
+
+    function notify() {
+        toast('Chicken Winner is ready!');
+        beep();
+        try {
+            if ('Notification' in window && Notification.permission === 'granted')
+                new Notification('Chicken Winner is ready!', { body: 'Your Shell Shockers cooldown is finished.' });
+        } catch (e) {}
+    }
+
+    setInterval(() => {
+        const app = window.vueApp;
+        if (!app || !app.chw) return;
+        const chw = app.chw;
+        const ready = !!chw.ready && !chw.limitReached && !chw.adBlockDetect;
+        if (lastReady === false && ready) notify();
+        lastReady = ready;
+    }, 500);
+
+    // ================= AUTO OPEN =================
+    setInterval(() => {
+        if (!stats.autoOpen) return;
+        const app = window.vueApp;
+        if (!app || !app.chw) return;
+        const chw = app.chw;
+        if (!chw.ready || chw.limitReached || chw.adBlockDetect) return;
+        if (Date.now() - lastOpen < 20000) return;
+        const btn = document.querySelector('#chw-home-timer button');
+        if (!visible(btn) || btn.classList.contains('chw-limit-reached')) return;
+        lastOpen = Date.now();
+        log('Opening Chicken Winner');
+        setTimeout(() => btn.click(), OPEN_DELAY_MS);
+    }, 1000);
+
+    // ================= AUTO PICK =================
+    function findEggs() {
+        const all  = Array.from(document.querySelectorAll('[class*="egg" i], [id*="egg" i], img[src*="egg" i]'));
+        const eggs = all.filter((el) => {
+            if (!visible(el)) return false;
+            if (el.closest('#chw-home-timer')) return false;
+            if (menu && menu.contains(el)) return false;
+            const tag = (el.className + ' ' + el.id + ' ' + (el.src || '')).toLowerCase();
+            return /chw|chick|nugget|winner|mini/.test(tag);
+        });
+        return eggs.filter((el) => !eggs.some((o) => o !== el && el.contains(o)));
+    }
+
+    setInterval(() => {
+        if (!stats.autoPick) return;
+        if (Date.now() - lastPick < 10000) return;
+        const eggs = findEggs();
+        if (eggs.length < 3) return;
+        const first3 = eggs.slice(0, 3);
+        const pick   = Math.floor(Math.random() * 3);
+        lastPick = Date.now();
+        log('Found eggs:', first3, 'picking number', pick + 1);
+        // Click 8 times rapidly to blast through all crack tiers
+        for (let i = 0; i < 8; i++) {
+            setTimeout(() => first3[pick] && first3[pick].click(), PICK_DELAY_MS + i * 80);
+        }
+    }, 100);
+
+    // ================= AUTO CLOSE =================
+    function findCloseButton() {
+        const cands = Array.from(document.querySelectorAll('button, [role="button"], a, [class*="btn" i], [class*="button" i]'));
+        return cands.find((el) => {
+            if (!visible(el)) return false;
+            if (el.closest('#chw-home-timer')) return false;
+            if (menu && menu.contains(el)) return false;
+            const txt = (el.textContent || '').trim().toLowerCase().replace(/\s+/g, ' ');
+            return txt.length < 30 && txt.indexOf(CLOSE_TEXT) !== -1;
+        });
+    }
+
+    setInterval(() => {
+        if (!stats.autoClose) return;
+        const sinceAction = Date.now() - Math.max(lastPick, lastOpen);
+        if (sinceAction < CLOSE_DELAY_MS || sinceAction > CLOSE_WINDOW_MS) return;
+        if (Date.now() - lastClose < 5000) return;
+        const btn = findCloseButton();
+        if (btn) { lastClose = Date.now(); log('Clicking CLUCK YEAH', btn); btn.click(); }
+    }, 500);
+
+    // ================= AUTO WAKE =================
+    setInterval(() => {
+        if (!stats.autoWake) return;
+        const app = window.vueApp;
+        if (!app || !app.chw) return;
+        const chw = app.chw;
+        if (!chw.limitReached || chw.adBlockDetect) return;
+        if (wakes >= MAX_WAKES) return;
+        if (Date.now() - lastClick < COOLDOWN_MS) return;
+        const cost = 200 * ((chw.resets || 0) + 1);
+        if (cost > MAX_COST) return;
+        const btn = document.querySelector('#chw-home-timer button.chw-limit-reached');
+        if (!btn || btn.offsetParent === null) return;
+        lastClick = Date.now(); wakes++; stats.wakes++; stats.spent += cost;
+        save(); btn.click();
+        console.log('[Auto Wake] Clicked wake for ' + cost + ' eggs (' + wakes + '/' + MAX_WAKES + ')');
+    }, 1000);
+
+    // ================= INIT =================
+    const initInterval = setInterval(() => {
+        if (!document.body) return;
+        clearInterval(initInterval);
+        buildMenu();
+        renderMenu();
+        renderLog();
+
+
+    }, 100);
+
+})();
