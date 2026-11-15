@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Auto Chicken Winner Mod
 // @namespace    http://tampermonkey.net/
-// @version      6.2
-// @description  Notifies when Chicken Winner is ready, auto-opens it, picks a random egg (1-3), clicks CLUCK YEAH after 5s, auto-wakes up to a limit, logs eggs and skins won, shows stats in a menu (press H) with Stats and Logs tabs
+// @version      6.4
+// @description  Auto Chicken Winner Mod - Mega Hack v9 style UI
 // @match        *://shellshock.io/*
 // @match        *://*.shellshock.io/*
 // @match        *://shellshockers.*/*
@@ -13,19 +13,18 @@
 (function () {
     'use strict';
 
-    // ---- Settings ----
-    const MENU_KEY       = 'h';
-    const MAX_COST       = 10000;
-    const MAX_WAKES      = 100;
-    const COOLDOWN_MS    = 15000;
-    const OPEN_DELAY_MS  = 0;
-    const PICK_DELAY_MS  = 0;
-    const CLOSE_DELAY_MS = 4000;
+    const MAX_COST        = 10000;
+    const MAX_WAKES       = 100;
+    const COOLDOWN_MS     = 15000;
+    const OPEN_DELAY_MS   = 0;
+    const PICK_DELAY_MS   = 0;
+    const CLOSE_DELAY_MS  = 4000;
     const CLOSE_WINDOW_MS = 60000;
-    const CLOSE_TEXT     = 'cluck yeah';
-    const MAX_LOG        = 10000;
-    const DEBUG          = true;
-    // ------------------
+    const CLOSE_TEXT      = 'cluck yeah';
+    const MAX_LOG         = 100;
+    const DEBUG           = true;
+    const CURRENT_VERSION = '6.4';
+    const RAW_URL = 'https://raw.githubusercontent.com/scriptXxxx814/auto-chicken-N-winner/refs/heads/main/Auto%20Chicken%20Winner%20Mod';
 
     const STORE_KEY  = 'chwStats_v2';
     const LOG_KEY_LS = 'chwLog_v1';
@@ -38,48 +37,34 @@
     const log = (...a) => DEBUG && console.log('[CHW Auto]', ...a);
     const visible = (el) => el && el.offsetParent !== null;
 
-    // ================= STATS DATA =================
     function load() {
         let s = null;
         try { s = JSON.parse(localStorage.getItem(STORE_KEY)); } catch (e) {}
         if (!s) s = {};
         if (s.day !== today()) {
             s = { day: today(), plays: 0, won: 0, spent: 0, wakes: 0, skins: [],
-                  visible: false, chickenAuto: s.chickenAuto !== false, usedMs: 0 };
+                  chickenAuto: s.chickenAuto !== false, usedMs: 0 };
         }
         if (typeof s.usedMs !== 'number') s.usedMs = 0;
         if (!Array.isArray(s.skins)) s.skins = [];
-        // migrate old per-toggle fields to single chickenAuto
-        if (typeof s.chickenAuto !== 'boolean') {
-            s.chickenAuto = (s.autoWake !== false && s.autoOpen !== false &&
-                             s.autoPick !== false && s.autoClose !== false);
-        }
-        // keep individual flags in sync with chickenAuto
+        if (typeof s.chickenAuto !== 'boolean') s.chickenAuto = true;
         s.autoWake = s.autoOpen = s.autoPick = s.autoClose = s.chickenAuto;
         return s;
     }
     let stats = load();
-    stats.visible = false; // always start hidden on page load
 
     function save() {
-        // keep individual flags in sync
         stats.autoWake = stats.autoOpen = stats.autoPick = stats.autoClose = stats.chickenAuto;
         try { localStorage.setItem(STORE_KEY, JSON.stringify(stats)); } catch (e) {}
         renderMenu();
     }
 
-    // ================= LOG DATA =================
     function loadLog() {
-        try {
-            const r = JSON.parse(localStorage.getItem(LOG_KEY_LS));
-            if (Array.isArray(r)) return r;
-        } catch (e) {}
+        try { const r = JSON.parse(localStorage.getItem(LOG_KEY_LS)); if (Array.isArray(r)) return r; } catch (e) {}
         return [];
     }
     let rewardLog = loadLog().map(e => {
-        if (e.type === 'egg' && /^[+-]?\d+$/.test(e.label)) {
-            e.label = e.label + ' eggs';
-        }
+        if (e.type === 'egg' && /^[+-]?\d+$/.test(e.label)) e.label = e.label + ' eggs';
         return e;
     });
 
@@ -89,315 +74,316 @@
         renderLog();
     }
 
-    function addLogEntry(label, type) {
-        rewardLog.push({ ts: Date.now(), label, type });
-        saveLog();
-    }
+    function addLogEntry(label, type) { rewardLog.push({ ts: Date.now(), label, type }); saveLog(); }
 
     function fmtLogDate(ts) {
         const d = new Date(ts);
-        const mo = String(d.getMonth() + 1).padStart(2, '0');
-        const dy = String(d.getDate()).padStart(2, '0');
-        const hh = d.getHours();
-        const mm = String(d.getMinutes()).padStart(2, '0');
-        const ampm = hh >= 12 ? 'PM' : 'AM';
-        const h12  = String(hh % 12 || 12);
-        return mo + '/' + dy + ' ' + h12 + ':' + mm + ampm;
+        const mo = String(d.getMonth()+1).padStart(2,'0'), dy = String(d.getDate()).padStart(2,'0');
+        const hh = d.getHours(), mm = String(d.getMinutes()).padStart(2,'0');
+        return mo+'/'+dy+' '+(hh%12||12)+':'+mm+(hh>=12?'PM':'AM');
     }
 
-    // ================= MENU =================
-    let menu      = null;
-    let tabStats  = null;
-    let tabLog    = null;
-    let paneStats = null;
-    let paneLog   = null;
-    let statsBody = null;
-    let logList   = null;
-
-    const TAB_ACTIVE   = 'padding:6px 0;flex:1;text-align:center;cursor:pointer;background:#fff;color:#2a9bcf;border-radius:8px;font:bold 13px sans-serif;border:none;outline:none;box-shadow:0 2px 6px rgba(0,0,0,0.15);transition:all .2s';
-    const TAB_INACTIVE = 'padding:6px 0;flex:1;text-align:center;cursor:pointer;background:transparent;color:#fff;border-radius:8px;font:bold 13px sans-serif;border:none;outline:none;box-shadow:none;transition:all .2s';
-
-    function switchTab(tab) {
-        paneStats.style.display = tab === 'stats' ? 'block' : 'none';
-        paneLog.style.display   = tab === 'log'   ? 'block' : 'none';
-        tabStats.style.cssText  = tab === 'stats' ? TAB_ACTIVE : TAB_INACTIVE;
-        tabLog.style.cssText    = tab === 'log'   ? TAB_ACTIVE : TAB_INACTIVE;
-        if (tab === 'log') renderLog();
+    function fmtTime(ms) {
+        const m = Math.floor(ms / 60000), h = Math.floor(m / 60);
+        return h > 0 ? h + 'h ' + (m % 60) + 'm' : m + 'm';
     }
+
+    // ===== MENU =====
+    let menu = null, paneStats = null, paneLog = null, statsBody = null, logList = null;
+    let tabStats = null, tabLog = null;
+    let menuVisible = true;
+
+    // Find egg icon from page
+    function getEggIconSrc() {
+        const selectors = [
+            'img[src*="egg_icon"]','img[src*="egg-icon"]','img[src*="eggcoin"]',
+            'img[src*="ico_egg"]','img[src*="/egg."]','img[class*="egg-icon"]',
+            'img[class*="eggIcon"]','img[class*="egg_icon"]'
+        ];
+        for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el && el.src) return el.src;
+        }
+        const hud = document.querySelector('#ss-hud img, .egg-count img, [class*="currency"] img');
+        return hud ? hud.src : null;
+    }
+
+    const mhStyle = document.createElement('style');
+    mhStyle.textContent = `
+        #chw-menu * { box-sizing:border-box; margin:0; padding:0; }
+        #chw-menu {
+            position:fixed; top:420px; left:10px; z-index:2147483646;
+            width:260px;
+            font-family:'Segoe UI',Arial,sans-serif;
+            transform:scale(0.72); transform-origin:top left;
+            border-radius:0;
+            background:#1b1b1b;
+            border:1px solid #111;
+            box-shadow:4px 4px 0 #000, 0 0 0 1px #333;
+            user-select:none;
+            display:none;
+            overflow:hidden;
+        }
+        /* Title bar */
+        #chw-menu .mh-titlebar {
+            background:#2a2a2a;
+            padding:5px 8px;
+            display:flex; align-items:center; justify-content:space-between;
+            cursor:move;
+            border-bottom:1px solid #111;
+        }
+        #chw-menu .mh-titlebar-left {
+            display:flex; align-items:center; gap:6px;
+        }
+        #chw-menu .mh-titlebar-btn {
+            width:11px; height:11px; border-radius:50%;
+            border:1px solid #000; cursor:pointer; flex-shrink:0;
+        }
+        #chw-menu .mh-titlebar-btn.close { background:#ff5f57; }
+        #chw-menu .mh-titlebar-btn.min   { background:#febc2e; }
+        #chw-menu .mh-titlebar-btn.max   { background:#28c840; }
+        #chw-menu .mh-titlebar-title {
+            font-size:11px; font-weight:700; color:#ddd;
+            letter-spacing:0.5px; margin-left:4px;
+        }
+        #chw-menu .mh-titlebar-ver {
+            font-size:9px; color:#555; letter-spacing:0.5px;
+        }
+        /* Tab bar */
+        #chw-menu .mh-tabs {
+            display:flex; background:#222; border-bottom:1px solid #111;
+        }
+        #chw-menu .mh-tab {
+            flex:1; padding:5px 0; text-align:center;
+            font-size:10px; font-weight:700; letter-spacing:0.8px;
+            color:#666; border:none; background:transparent; cursor:pointer;
+            text-transform:uppercase; border-bottom:2px solid transparent;
+            transition:color .1s;
+        }
+        #chw-menu .mh-tab.active { color:#fff; border-bottom:2px solid #4a9eff; }
+        #chw-menu .mh-tab:hover:not(.active) { color:#aaa; }
+        /* Section header - like MH "— Section —" */
+        #chw-menu .mh-section-head {
+            display:flex; align-items:center; justify-content:space-between;
+            padding:4px 8px 3px;
+            background:#252525;
+            border-top:1px solid #111; border-bottom:1px solid #111;
+            font-size:10px; font-weight:700; color:#4a9eff;
+            letter-spacing:0.8px; text-transform:uppercase;
+        }
+        #chw-menu .mh-section-head span { color:#333; font-size:9px; }
+        /* Row */
+        #chw-menu .mh-row {
+            display:flex; align-items:center; justify-content:space-between;
+            padding:4px 10px;
+            border-bottom:1px solid #1e1e1e;
+            font-size:11px; color:#bbb;
+            transition:background .1s;
+        }
+        #chw-menu .mh-row:hover { background:#222; }
+        #chw-menu .mh-row-label { display:flex; align-items:center; gap:5px; }
+        #chw-menu .mh-row-val { color:#fff; font-weight:600; font-size:11px; }
+        #chw-menu .mh-row-sub { color:#555; font-size:9px; }
+        /* Toggle - MH style checkbox */
+        #chw-menu .mh-check {
+            width:13px; height:13px; border:1px solid #555;
+            background:#1b1b1b; border-radius:2px; cursor:pointer;
+            display:flex; align-items:center; justify-content:center;
+            flex-shrink:0; transition:all .1s;
+        }
+        #chw-menu .mh-check.on { background:#4a9eff; border-color:#4a9eff; }
+        #chw-menu .mh-check.on::after { content:'✓'; color:#fff; font-size:9px; font-weight:900; line-height:1; }
+        /* Log */
+        #chw-menu .mh-log-scroll { max-height:200px; overflow-y:auto; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar { width:3px; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar-track { background:#1b1b1b; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar-thumb { background:#4a9eff; }
+        #chw-menu .mh-log-row {
+            display:flex; align-items:center; justify-content:space-between;
+            padding:3px 10px; border-bottom:1px solid #1e1e1e;
+            font-size:10px; color:#bbb;
+        }
+        #chw-menu .mh-log-row:nth-child(even) { background:#1e1e1e; }
+        #chw-menu .mh-log-left { display:flex; align-items:center; gap:4px; }
+        #chw-menu .mh-log-time { color:#444; font-size:9px; white-space:nowrap; }
+        #chw-menu .mh-log-ico { width:13px; height:13px; object-fit:contain; }
+        #chw-menu .mh-empty { padding:14px; text-align:center; color:#444; font-size:10px; letter-spacing:1px; text-transform:uppercase; }
+        /* Footer */
+        #chw-menu .mh-footer {
+            display:flex; align-items:center; justify-content:space-between;
+            padding:4px 8px; background:#222; border-top:1px solid #111;
+        }
+        #chw-menu .mh-btn {
+            background:#2a2a2a; color:#bbb; border:1px solid #444;
+            padding:3px 8px; border-radius:2px; font-size:9px; font-weight:700;
+            cursor:pointer; letter-spacing:0.5px; text-transform:uppercase;
+            transition:all .1s;
+        }
+        #chw-menu .mh-btn:hover { background:#4a9eff; color:#fff; border-color:#4a9eff; }
+        #chw-menu .mh-hint { font-size:9px; color:#444; letter-spacing:0.5px; text-transform:uppercase; }
+    `;
+    document.head.appendChild(mhStyle);
 
     function buildMenu() {
         if (menu || !document.body) return;
 
         menu = document.createElement('div');
-        menu.style.cssText = [
-            'position:fixed', 'top:90px', 'right:20px', 'z-index:2147483646',
-            'width:300px', 'border-radius:14px', 'overflow:hidden',
-            'background:#9fe3ff', 'color:#1b7ca8', 'border:4px solid #2a9bcf',
-            'font:bold 14px sans-serif', 'box-shadow:0 6px 22px rgba(0,0,0,.4)',
-            'user-select:none',
-            'transform:scale(0.67)', 'transform-origin:top right',
-            'will-change:transform,opacity'
-        ].join(';');
+        menu.id = 'chw-menu';
 
-        const head = document.createElement('div');
-        head.style.cssText = 'padding:8px 12px;background:#2a9bcf;color:#fff;text-align:center;font-size:15px;cursor:move;display:flex;align-items:center;justify-content:center;gap:8px';
-        const headIco = document.createElement('img');
-        headIco.id = 'chw-head-ico';
-        headIco.style.cssText = 'width:28px;height:28px;object-fit:contain;border-radius:50%;display:none';
-        const headTxt = document.createElement('span');
-        headTxt.textContent = 'Auto Chicken Winner Mod';
-        head.appendChild(headIco);
-        head.appendChild(headTxt);
-        menu.appendChild(head);
+        // Title bar
+        const titlebar = document.createElement('div');
+        titlebar.className = 'mh-titlebar';
+        titlebar.innerHTML =
+            '<div class="mh-titlebar-left">' +
+              '<div class="mh-titlebar-btn close"></div>' +
+              '<div class="mh-titlebar-btn min"></div>' +
+              '<div class="mh-titlebar-btn max"></div>' +
+              '<span class="mh-titlebar-title">Auto Chicken Winner</span>' +
+            '</div>' +
+            '<span class="mh-titlebar-ver">v' + CURRENT_VERSION + ' — H</span>';
+        menu.appendChild(titlebar);
 
-        // Update the skin icon
-        function updateSkinIcon() {
-            try {
-                let found = false;
-                const canvases = Array.from(document.querySelectorAll('canvas'));
-                const previewCanvas = canvases.find(c => {
-                    const cl = (c.className || '').toLowerCase();
-                    const id = (c.id || '').toLowerCase();
-                    return /preview|skin|avatar|egg|player/.test(cl + id) && c.width > 0 && c.width < 300;
-                });
-                if (previewCanvas) {
-                    try {
-                        const url = previewCanvas.toDataURL();
-                        if (url && url !== 'data:,') {
-                            headIco.src = url;
-                            headIco.style.display = 'block';
-                            found = true;
-                        }
-                    } catch (e) {}
-                }
-                if (!found) {
-                    const wrappers = Array.from(document.querySelectorAll(
-                        '[class*="skin-preview"], [class*="skinPreview"], [class*="eggPreview"], ' +
-                        '[class*="egg-preview"], [class*="avatar"], [class*="player-icon"], [class*="playerIcon"]'
-                    ));
-                    for (const w of wrappers) {
-                        if (!visible(w)) continue;
-                        const imgs = w.querySelectorAll('img');
-                        if (imgs.length >= 1) {
-                            const size = 32;
-                            const c = document.createElement('canvas');
-                            c.width = size; c.height = size;
-                            const ctx = c.getContext('2d');
-                            let loaded = 0;
-                            const total = imgs.length;
-                            imgs.forEach(img => {
-                                const i = new Image();
-                                i.crossOrigin = 'anonymous';
-                                i.onload = () => {
-                                    ctx.drawImage(i, 0, 0, size, size);
-                                    if (++loaded === total) {
-                                        headIco.src = c.toDataURL();
-                                        headIco.style.display = 'block';
-                                    }
-                                };
-                                i.onerror = () => { ++loaded; };
-                                i.src = img.src;
-                            });
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if (!found) {
-                    const skinImg = document.querySelector(
-                        'img[src*="skin"], img[src*="eggskin"], img[src*="egg-skin"], img[src*="eggSkin"]'
-                    );
-                    const hatImg = document.querySelector(
-                        'img[src*="hat"], img[src*="accessory"], img[src*="head"]'
-                    );
-                    if (skinImg) {
-                        if (hatImg) {
-                            const size = 32;
-                            const c = document.createElement('canvas');
-                            c.width = size; c.height = size;
-                            const ctx = c.getContext('2d');
-                            const s = new Image(); s.crossOrigin = 'anonymous';
-                            s.onload = () => {
-                                ctx.drawImage(s, 0, 0, size, size);
-                                const h = new Image(); h.crossOrigin = 'anonymous';
-                                h.onload = () => {
-                                    ctx.drawImage(h, 0, 0, size, size);
-                                    headIco.src = c.toDataURL();
-                                    headIco.style.display = 'block';
-                                };
-                                h.onerror = () => {
-                                    headIco.src = c.toDataURL();
-                                    headIco.style.display = 'block';
-                                };
-                                h.src = hatImg.src;
-                            };
-                            s.src = skinImg.src;
-                        } else {
-                            headIco.src = skinImg.src;
-                            headIco.style.display = 'block';
-                        }
-                    }
-                }
-            } catch (e) { log('Skin icon error:', e); }
-        }
-        const skinInterval = setInterval(updateSkinIcon, 3000);
-        updateSkinIcon();
+        // close btn
+        titlebar.querySelector('.close').onclick = () => { menuVisible = false; menu.style.display = 'none'; };
 
-        const tabBar = document.createElement('div');
-        tabBar.style.cssText = 'display:flex;gap:4px;padding:6px 10px;background:#2a9bcf';
+        // Tabs
+        const tabs = document.createElement('div');
+        tabs.className = 'mh-tabs';
         tabStats = document.createElement('button');
+        tabStats.className = 'mh-tab active';
         tabStats.textContent = 'Stats';
-        tabStats.style.cssText = TAB_ACTIVE;
         tabLog = document.createElement('button');
+        tabLog.className = 'mh-tab';
         tabLog.textContent = 'Logs';
-        tabLog.style.cssText = TAB_INACTIVE;
-        tabBar.appendChild(tabStats);
-        tabBar.appendChild(tabLog);
-        menu.appendChild(tabBar);
-        tabStats.onclick = () => switchTab('stats');
-        tabLog.onclick   = () => switchTab('log');
+        tabs.appendChild(tabStats);
+        tabs.appendChild(tabLog);
+        menu.appendChild(tabs);
 
+        tabStats.onclick = () => { tabStats.className='mh-tab active'; tabLog.className='mh-tab'; paneStats.style.display='block'; paneLog.style.display='none'; };
+        tabLog.onclick   = () => { tabLog.className='mh-tab active'; tabStats.className='mh-tab'; paneLog.style.display='block'; paneStats.style.display='none'; renderLog(); };
+
+        // Stats pane
         paneStats = document.createElement('div');
         paneStats.style.display = 'block';
 
+        // Stats section
+        const sh1 = document.createElement('div');
+        sh1.className = 'mh-section-head';
+        sh1.innerHTML = '— Session Stats <span>today</span>';
+        paneStats.appendChild(sh1);
+
         statsBody = document.createElement('div');
-        statsBody.style.cssText = 'padding:12px 14px;line-height:1.7';
         paneStats.appendChild(statsBody);
 
-        // ---- Chicken Winner Settings dropdown ----
-        const settingsWrap = document.createElement('div');
-        settingsWrap.style.cssText = 'border-top:2px solid #2a9bcf';
+        // Automation section
+        const sh2 = document.createElement('div');
+        sh2.className = 'mh-section-head';
+        sh2.innerHTML = '— Automation';
+        paneStats.appendChild(sh2);
 
-        const settingsToggle = document.createElement('div');
-        settingsToggle.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:9px 14px;cursor:pointer;background:#7dd4f0;color:#1b7ca8;font:bold 13px sans-serif;user-select:none';
-        settingsToggle.innerHTML = '<span>Chicken Winner Settings</span><span id="chw-arrow" style="font-size:11px;transition:transform 0.2s">▼</span>';
-
-        const settingsBody = document.createElement('div');
-        settingsBody.id = 'chw-settings-body';
-        settingsBody.style.cssText = 'display:none;padding:10px 14px 10px;background:#9fe3ff';
-
-        // toggle CSS
-        const style = document.createElement('style');
-        style.textContent = `
-            .chw-toggle-row {
-                display:flex;justify-content:space-between;align-items:center;
-                padding:6px 0;
-                font:bold 13px sans-serif;color:#1b7ca8;
-            }
-            .chw-switch { position:relative;width:40px;height:22px;flex-shrink:0; }
-            .chw-switch input { opacity:0;width:0;height:0;position:absolute; }
-            .chw-slider {
-                position:absolute;inset:0;border-radius:22px;
-                background:#b0d8ee;cursor:pointer;transition:background .2s;
-            }
-            .chw-slider:before {
-                content:'';position:absolute;width:16px;height:16px;border-radius:50%;
-                background:#fff;left:3px;top:3px;transition:transform .2s;
-                box-shadow:0 1px 3px rgba(0,0,0,.3);
-            }
-            .chw-switch input:checked + .chw-slider { background:#2a9bcf; }
-            .chw-switch input:checked + .chw-slider:before { transform:translateX(18px); }
-        `;
-        document.head.appendChild(style);
-
-        // Single "Chicken Auto" toggle
-        const row = document.createElement('div');
-        row.className = 'chw-toggle-row';
-        row.innerHTML =
-            '<span>Auto Chicken Winner</span>' +
-            '<label class="chw-switch">' +
-              '<input type="checkbox" id="chw-ca">' +
-              '<span class="chw-slider"></span>' +
-            '</label>';
-        row.querySelector('input').onchange = (e) => {
-            stats.chickenAuto = e.target.checked;
+        const autoRow = document.createElement('div');
+        autoRow.className = 'mh-row';
+        autoRow.style.cursor = 'pointer';
+        const autoLabel = document.createElement('span');
+        autoLabel.className = 'mh-row-label';
+        autoLabel.textContent = 'Auto Chicken Winner';
+        const autoCheck = document.createElement('div');
+        autoCheck.className = 'mh-check' + (stats.chickenAuto ? ' on' : '');
+        autoCheck.id = 'chw-ca';
+        autoRow.appendChild(autoLabel);
+        autoRow.appendChild(autoCheck);
+        autoRow.onclick = () => {
+            stats.chickenAuto = !stats.chickenAuto;
+            autoCheck.className = 'mh-check' + (stats.chickenAuto ? ' on' : '');
             save();
         };
-        settingsBody.appendChild(row);
+        paneStats.appendChild(autoRow);
 
-        let settingsOpen = false;
-        settingsToggle.addEventListener('click', () => {
-            settingsOpen = !settingsOpen;
-            settingsBody.style.display = settingsOpen ? 'block' : 'none';
-            const arrow = settingsToggle.querySelector('#chw-arrow');
-            if (arrow) arrow.style.transform = settingsOpen ? 'rotate(180deg)' : '';
-        });
-
-        settingsWrap.appendChild(settingsToggle);
-        settingsWrap.appendChild(settingsBody);
-        paneStats.appendChild(settingsWrap);
-
+        // Footer
         const foot = document.createElement('div');
-        foot.style.cssText = 'padding:8px 14px;text-align:center;border-top:2px solid #2a9bcf';
-        foot.innerHTML =
-            '<button id="chw-reset" style="cursor:pointer;border:2px solid #2a9bcf;background:#fff;color:#1b7ca8;border-radius:8px;font:bold 12px sans-serif;padding:3px 8px">Reset stats</button>' +
-            '<div style="font-weight:normal;font-size:12px;margin-top:5px">Press ' + MENU_KEY.toUpperCase() + ' to toggle</div>';
+        foot.className = 'mh-footer';
+        foot.innerHTML = '<button class="mh-btn" id="chw-reset">Reset Stats</button><span class="mh-hint">Auto Mod Active</span>';
         paneStats.appendChild(foot);
         menu.appendChild(paneStats);
 
+        // Log pane
         paneLog = document.createElement('div');
-        paneLog.style.cssText = 'display:none;flex-direction:column';
+        paneLog.style.display = 'none';
+
+        const lsh = document.createElement('div');
+        lsh.className = 'mh-section-head';
+        lsh.innerHTML = '— Reward Log';
+        paneLog.appendChild(lsh);
 
         logList = document.createElement('div');
-        logList.style.cssText = 'max-height:300px;overflow-y:auto';
+        logList.className = 'mh-log-scroll';
         paneLog.appendChild(logList);
 
         const logFoot = document.createElement('div');
-        logFoot.style.cssText = 'padding:8px 14px;text-align:center;font-size:12px;font-weight:normal;border-top:2px solid #2a9bcf';
-        logFoot.innerHTML = '<button id="chw-log-clear" style="cursor:pointer;border:2px solid #2a9bcf;background:#fff;color:#1b7ca8;border-radius:8px;font:bold 12px sans-serif;padding:3px 10px">Clear log</button>';
+        logFoot.className = 'mh-footer';
+        logFoot.innerHTML = '<button class="mh-btn" id="chw-log-clear">Clear Log</button><span class="mh-hint">' + rewardLog.length + ' entries</span>';
         paneLog.appendChild(logFoot);
         menu.appendChild(paneLog);
 
-        logFoot.querySelector('#chw-log-clear').onclick = () => { rewardLog = []; saveLog(); };
+        logFoot.querySelector('#chw-log-clear').onclick = () => { rewardLog = []; saveLog(); logFoot.querySelector('.mh-hint').textContent = '0 entries'; };
 
         document.body.appendChild(menu);
 
-        // drag
+        // Drag
         let drag = null;
-        head.addEventListener('mousedown', (e) => {
+        titlebar.addEventListener('mousedown', (e) => {
+            if (e.target.classList.contains('mh-titlebar-btn')) return;
             const r = menu.getBoundingClientRect();
-            drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+            const scale = 0.72;
+            drag = { dx: e.clientX - r.left / scale, dy: e.clientY - r.top / scale };
             e.preventDefault();
         });
         document.addEventListener('mousemove', (e) => {
             if (!drag) return;
-            menu.style.left  = (e.clientX - drag.dx) + 'px';
-            menu.style.top   = (e.clientY - drag.dy) + 'px';
-            menu.style.right = 'auto';
+            menu.style.left = (e.clientX - drag.dx) + 'px';
+            menu.style.top  = (e.clientY - drag.dy) + 'px';
         });
         document.addEventListener('mouseup', () => { drag = null; });
+
+        setTimeout(pinBelowShop, 500);
+        window.addEventListener('resize', pinBelowShop);
+
+        foot.querySelector('#chw-reset').onclick = () => {
+            stats.plays=0; stats.won=0; stats.spent=0; stats.wakes=0; stats.skins=[]; stats.usedMs=0; save();
+        };
     }
 
-    function fmtTime(ms) {
-        const m = Math.floor(ms / 60000);
-        const h = Math.floor(m / 60);
-        return h > 0 ? h + 'h ' + (m % 60) + 'm' : m + 'm';
+    function pinBelowShop() {
+        if (!menu) return;
+        const btns = Array.from(document.querySelectorAll('a, button, div, li'));
+        const shop = btns.find(el => visible(el) && /^shop$/i.test((el.textContent || '').trim()));
+        if (!shop) return;
+        const r = shop.getBoundingClientRect();
+        menu.style.top  = Math.round(r.bottom + 8) + 'px';
+        menu.style.left = Math.round(r.left) + 'px';
     }
 
     function renderMenu() {
         buildMenu();
         if (!menu) return;
-        menu.style.display = stats.visible ? 'block' : 'none';
-        if (!stats.visible) return;
 
-        // sync single toggle
         const ca = menu.querySelector('#chw-ca');
-        if (ca) ca.checked = !!stats.chickenAuto;
-
-        const rb = menu.querySelector('#chw-reset');
-        if (rb) rb.onclick = () => {
-            stats.plays = 0; stats.won = 0; stats.spent = 0;
-            stats.wakes = 0; stats.skins = []; stats.usedMs = 0;
-            save();
-        };
+        if (ca) {
+            ca.className = 'mh-check' + (stats.chickenAuto ? ' on' : '');
+        }
 
         const used = stats.usedMs + (Date.now() - startedAt);
+        const eggSrc = getEggIconSrc();
+        const eggIco = eggSrc
+            ? '<img src="' + eggSrc + '" style="width:12px;height:12px;object-fit:contain;vertical-align:middle;margin-right:3px" onerror="this.style.display=\'none\'">'
+            : '🥚';
+
         statsBody.innerHTML =
-            'Plays: '      + stats.plays + '<br>' +
-            'Eggs won: '   + stats.won   + '<br>' +
-            'Eggs spent: ' + stats.spent + ' (' + stats.wakes + ' wakes)<br>' +
-            'Time used: ' + fmtTime(used) +
-            (stats.skins.length ? '<br>Skins won: ' + stats.skins.join(', ') : '');
+            '<div class="mh-row"><span class="mh-row-label">Plays</span><span class="mh-row-val">' + stats.plays + '</span></div>' +
+            '<div class="mh-row"><span class="mh-row-label">' + eggIco + ' Eggs Won</span><span class="mh-row-val">' + stats.won + '</span></div>' +
+            '<div class="mh-row"><span class="mh-row-label">' + eggIco + ' Eggs Spent</span><span class="mh-row-val">' + stats.spent + ' <span class="mh-row-sub">(' + stats.wakes + ' wakes)</span></span></div>' +
+            '<div class="mh-row"><span class="mh-row-label">Time Used</span><span class="mh-row-val">' + fmtTime(used) + '</span></div>' +
+            (stats.skins.length ? '<div class="mh-row"><span class="mh-row-label">Skins Won</span><span class="mh-row-val">' + stats.skins.length + '</span></div>' : '');
     }
 
     function renderLog() {
@@ -405,93 +391,68 @@
         logList.innerHTML = '';
         const entries = rewardLog.slice().reverse();
         if (!entries.length) {
-            const empty = document.createElement('div');
-            empty.style.cssText = 'padding:16px;text-align:center;color:#1b7ca8;font-weight:normal';
-            empty.textContent = 'No rewards logged yet.';
-            logList.appendChild(empty);
+            logList.innerHTML = '<div class="mh-empty">No rewards logged yet</div>';
             return;
         }
-        entries.forEach((entry, i) => {
+        const eggSrc = getEggIconSrc();
+        entries.forEach(entry => {
             const row = document.createElement('div');
-            row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;' +
-                'padding:10px 14px;background:' + (i % 2 === 0 ? '#9fe3ff' : '#b8ecff') + ';' +
-                'border-bottom:1px solid rgba(42,155,207,0.2)';
+            row.className = 'mh-log-row';
             const left = document.createElement('span');
-            left.style.cssText = 'font-size:14px;font-weight:bold;color:#1b7ca8;display:flex;align-items:center;gap:5px';
-            if (entry.type === 'egg') {
-                const pageIco = document.querySelector(
-                    'img[src*="egg_icon"], img[src*="egg-icon"], img[src*="eggcoin"], ' +
-                    'img[src*="ico_egg"], img[src*="/egg."], img[class*="egg-icon"], ' +
-                    'img[class*="eggIcon"], img[class*="egg_icon"]'
-                );
-                const ico = document.createElement('img');
-                if (pageIco && pageIco.src) {
-                    ico.src = pageIco.src;
-                } else {
-                    const hudEgg = document.querySelector('#ss-hud img, .egg-count img, [class*="currency"] img');
-                    ico.src = hudEgg ? hudEgg.src : '';
-                }
-                ico.style.cssText = 'width:18px;height:18px;object-fit:contain;vertical-align:middle;flex-shrink:0';
-                ico.onerror = () => { ico.style.display = 'none'; };
-                if (ico.src) left.appendChild(ico);
-                else {
-                    const span = document.createElement('span');
-                    span.textContent = '🥚';
-                    span.style.fontSize = '15px';
-                    left.appendChild(span);
-                }
-            } else if (entry.type === 'skin') {
-                let icoEl = null;
-                try {
-                    if (window.extern && window.extern.catalog) {
-                        const items = window.extern.catalog.items || window.extern.catalog._items || [];
-                        const match = Array.from(items).find(it => {
-                            const n = it.name || it.item_name || it.itemName || it.title || '';
-                            return n === entry.label;
-                        });
-                        if (match) {
-                            const imgUrl = match.imgUrl || match.img_url || match.imageUrl || match.icon || match.thumbnail;
-                            if (imgUrl) {
-                                icoEl = document.createElement('img');
-                                icoEl.src = imgUrl;
-                                icoEl.style.cssText = 'width:20px;height:20px;object-fit:contain;flex-shrink:0;border-radius:3px';
-                                icoEl.onerror = () => { icoEl.style.display = 'none'; };
-                            }
-                        }
-                    }
-                } catch (e) {}
-                if (!icoEl) {
-                    icoEl = document.createElement('span');
-                    icoEl.textContent = '🎩';
-                    icoEl.style.fontSize = '15px';
-                }
-                left.appendChild(icoEl);
+            left.className = 'mh-log-left';
+            if (entry.type === 'egg' && eggSrc) {
+                left.innerHTML = '<img src="' + eggSrc + '" class="mh-log-ico" onerror="this.outerHTML=\'🥚\'"> ' + entry.label;
+            } else {
+                left.textContent = (entry.type === 'egg' ? '🥚 ' : '🎩 ') + entry.label;
             }
-            const txt = document.createElement('span');
-            txt.textContent = entry.label;
-            left.appendChild(txt);
             const right = document.createElement('span');
-            right.style.cssText = 'font-size:13px;font-weight:bold;color:#1b7ca8;white-space:nowrap;margin-left:10px';
+            right.className = 'mh-log-time';
             right.textContent = fmtLogDate(entry.ts);
             row.appendChild(left);
             row.appendChild(right);
             logList.appendChild(row);
         });
+        // update entry count
+        const hint = paneLog && paneLog.querySelector('.mh-hint');
+        if (hint) hint.textContent = rewardLog.length + ' entries';
     }
 
-    // H key toggles the menu
+    // H key toggle
     document.addEventListener('keydown', (e) => {
-        if (e.key.toLowerCase() !== MENU_KEY) return;
+        if (e.key.toLowerCase() !== 'h') return;
         if (e.ctrlKey || e.altKey || e.metaKey) return;
         const t = e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-        stats.visible = !stats.visible;
-        save();
+        menuVisible = !menuVisible;
+        if (menu) menu.style.display = menuVisible ? 'block' : 'none';
     });
 
-    // ================= TRACKING =================
+    // ===== IN-GAME DETECTION =====
+    function isInGame() {
+        const app = window.vueApp;
+        if (app) {
+            if (app.inGame || app.playing || app.gameActive) return true;
+            if (app.page === 'home' || app.page === 'inventory' || app.page === 'profile' || app.page === 'shop') return false;
+        }
+        const quit = document.querySelector('#nav-quit, [data-page="quit"], .nav-quit');
+        if (quit && visible(quit)) return true;
+        return false;
+    }
+
+    // ===== TRACKING =====
     setInterval(() => {
         if (stats.day !== today()) { stats = load(); }
+        if (menu) {
+            const inGame = isInGame();
+            if (inGame !== menu._lastInGame) {
+                menu._debounceCount = (menu._debounceCount || 0) + 1;
+                if (menu._debounceCount >= 2) {
+                    if (inGame) { menu.style.display = 'none'; menuVisible = false; }
+                    menu._lastInGame = inGame;
+                    menu._debounceCount = 0;
+                }
+            } else { menu._debounceCount = 0; }
+        }
         const app = window.vueApp;
         if (app && app.chw) {
             const c = app.chw.winnerCounter;
@@ -508,16 +469,12 @@
         try { localStorage.setItem(STORE_KEY, JSON.stringify(stats)); } catch (e) {}
     });
 
-    // ================= REWARD LOGGER =================
+    // ===== REWARD LOGGER =====
     function nameForItem(id) {
         try {
             const item = window.extern.catalog.findItemById(id);
-            if (item) {
-                const n = item.name || item.item_name || item.itemName || item.title;
-                if (n) return n;
-                log('Item found but no name field:', id, item);
-            } else { log('No catalog item for id', id); }
-        } catch (e) { log('Catalog lookup failed for id', id, e); }
+            if (item) { const n = item.name||item.item_name||item.itemName||item.title; if (n) return n; }
+        } catch (e) {}
         return 'Item #' + id;
     }
 
@@ -525,19 +482,18 @@
         const app = window.vueApp;
         if (!app || !app.chw || !app.chw.reward) return;
         const r = app.chw.reward;
-        const ids  = Array.isArray(r.itemIds) ? r.itemIds.slice() : [];
+        const ids = Array.isArray(r.itemIds) ? r.itemIds.slice() : [];
         const eggs = typeof r.eggs === 'number' ? r.eggs : 0;
         if (!ids.length && !eggs) { lastRewardSig = ''; return; }
         const sig = eggs + '|' + ids.join(',');
         if (sig === lastRewardSig) return;
         lastRewardSig = sig;
-        log('Reward:', JSON.parse(JSON.stringify(r)));
         if (eggs) { stats.won += eggs; addLogEntry((eggs > 0 ? '+' : '') + eggs + ' eggs', 'egg'); }
         ids.forEach((id) => { const name = nameForItem(id); stats.skins.push(name); addLogEntry(name, 'skin'); });
         save();
     }, 200);
 
-    // ================= NOTIFIER =================
+    // ===== NOTIFIER =====
     document.addEventListener('click', () => {
         if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
     }, { once: true });
@@ -547,68 +503,47 @@
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             [880, 1175].forEach((freq, i) => {
                 const osc = ctx.createOscillator(), gain = ctx.createGain();
-                osc.frequency.value = freq;
-                osc.connect(gain); gain.connect(ctx.destination);
+                osc.frequency.value = freq; osc.connect(gain); gain.connect(ctx.destination);
                 gain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.2);
                 gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.2 + 0.18);
-                osc.start(ctx.currentTime + i * 0.2);
-                osc.stop(ctx.currentTime + i * 0.2 + 0.2);
+                osc.start(ctx.currentTime + i * 0.2); osc.stop(ctx.currentTime + i * 0.2 + 0.2);
             });
         } catch (e) {}
     }
 
-    function toast(text) {
-        // inject keyframes once
-        if (!document.getElementById('chw-toast-style')) {
-            const s = document.createElement('style');
-            s.id = 'chw-toast-style';
-            s.textContent = `
-                @keyframes chw-slidein {
-                    0%   { opacity:0; transform:translateX(-50%) translateY(-40px) scale(0.85); }
-                    60%  { transform:translateX(-50%) translateY(6px) scale(1.03); }
-                    100% { opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
-                }
-                @keyframes chw-pulse {
-                    0%,100% { box-shadow:0 0 18px 4px rgba(42,155,207,0.5), 0 6px 22px rgba(0,0,0,.35); }
-                    50%     { box-shadow:0 0 32px 10px rgba(42,155,207,0.85), 0 6px 22px rgba(0,0,0,.35); }
-                }
-                @keyframes chw-fadeout {
-                    0%   { opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
-                    100% { opacity:0; transform:translateX(-50%) translateY(-20px) scale(0.9); }
-                }
-                .chw-toast {
-                    position:fixed; top:30px; left:50%; z-index:2147483647;
-                    padding:9px 20px; border-radius:12px;
-                    background:linear-gradient(135deg,#1b7ca8 0%,#2a9bcf 50%,#50c8f0 100%);
-                    color:#fff; border:2px solid rgba(255,255,255,0.35);
-                    font:bold 14px sans-serif; text-align:center; white-space:nowrap;
-                    cursor:pointer; letter-spacing:0.5px;
-                    text-shadow:0 1px 4px rgba(0,0,0,0.3);
-                    animation: chw-slidein 0.45s cubic-bezier(.22,.68,0,1.4) forwards,
-                               chw-pulse 1.6s ease-in-out 0.5s infinite;
-                }
-                .chw-toast.hide {
-                    animation: chw-fadeout 0.5s ease forwards !important;
-                }
-                .chw-toast-icon {
-                    display:block; font-size:28px; margin-bottom:4px;
-                    animation: chw-pulse 1s ease-in-out infinite;
-                }
-
-            `;
-            document.head.appendChild(s);
+    const toastStyle = document.createElement('style');
+    toastStyle.textContent = `
+        @keyframes chw-slidein {
+            0%   { opacity:0; transform:translateX(-50%) translateY(-30px) scale(0.9); }
+            70%  { transform:translateX(-50%) translateY(4px) scale(1.02); }
+            100% { opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
         }
+        @keyframes chw-fadeout {
+            0%   { opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
+            100% { opacity:0; transform:translateX(-50%) translateY(-16px) scale(0.95); }
+        }
+        .chw-toast {
+            position:fixed; top:24px; left:50%; z-index:2147483647;
+            padding:7px 18px; border-radius:3px;
+            background:#1b1b1b; color:#fff;
+            border:1px solid #333; border-top:2px solid #4a9eff;
+            font:700 12px 'Segoe UI',sans-serif; white-space:nowrap;
+            cursor:pointer; letter-spacing:0.5px;
+            box-shadow:0 4px 16px rgba(0,0,0,0.6);
+            animation: chw-slidein 0.3s cubic-bezier(.22,.68,0,1.3) forwards;
+        }
+        .chw-toast.hide { animation: chw-fadeout 0.3s ease forwards !important; }
+    `;
+    document.head.appendChild(toastStyle);
 
+    function toast(text) {
         const el = document.createElement('div');
         el.className = 'chw-toast';
-        el.innerHTML = text;
-        el.onclick = () => {
-            el.classList.add('hide');
-            setTimeout(() => el.remove(), 500);
-        };
+        el.textContent = text;
+        el.onclick = () => { el.classList.add('hide'); setTimeout(() => el.remove(), 350); };
         document.body.appendChild(el);
-        setTimeout(() => { el.classList.add('hide'); }, 5000);
-        setTimeout(() => el.remove(), 5600);
+        setTimeout(() => { el.classList.add('hide'); }, 4000);
+        setTimeout(() => el.remove(), 4400);
     }
 
     function notify() {
@@ -616,7 +551,7 @@
         beep();
         try {
             if ('Notification' in window && Notification.permission === 'granted')
-                new Notification('Chicken Winner is ready!', { body: 'Your Shell Shockers cooldown is finished.' });
+                new Notification('Chicken Winner is ready!');
         } catch (e) {}
     }
 
@@ -629,7 +564,7 @@
         lastReady = ready;
     }, 500);
 
-    // ================= AUTO OPEN =================
+    // ===== AUTO OPEN =====
     setInterval(() => {
         if (!stats.autoOpen) return;
         const app = window.vueApp;
@@ -640,13 +575,12 @@
         const btn = document.querySelector('#chw-home-timer button');
         if (!visible(btn) || btn.classList.contains('chw-limit-reached')) return;
         lastOpen = Date.now();
-        log('Opening Chicken Winner');
         setTimeout(() => btn.click(), OPEN_DELAY_MS);
     }, 1000);
 
-    // ================= AUTO PICK =================
+    // ===== AUTO PICK =====
     function findEggs() {
-        const all  = Array.from(document.querySelectorAll('[class*="egg" i], [id*="egg" i], img[src*="egg" i]'));
+        const all = Array.from(document.querySelectorAll('[class*="egg" i], [id*="egg" i], img[src*="egg" i]'));
         const eggs = all.filter((el) => {
             if (!visible(el)) return false;
             if (el.closest('#chw-home-timer')) return false;
@@ -663,16 +597,14 @@
         const eggs = findEggs();
         if (eggs.length < 3) return;
         const first3 = eggs.slice(0, 3);
-        const pick   = Math.floor(Math.random() * 3);
+        const pick = Math.floor(Math.random() * 3);
         lastPick = Date.now();
-        log('Found eggs:', first3, 'picking number', pick + 1);
-        // Click 8 times rapidly to blast through all crack tiers
         for (let i = 0; i < 8; i++) {
             setTimeout(() => first3[pick] && first3[pick].click(), PICK_DELAY_MS + i * 80);
         }
     }, 100);
 
-    // ================= AUTO CLOSE =================
+    // ===== AUTO CLOSE =====
     function findCloseButton() {
         const cands = Array.from(document.querySelectorAll('button, [role="button"], a, [class*="btn" i], [class*="button" i]'));
         return cands.find((el) => {
@@ -690,10 +622,10 @@
         if (sinceAction < CLOSE_DELAY_MS || sinceAction > CLOSE_WINDOW_MS) return;
         if (Date.now() - lastClose < 5000) return;
         const btn = findCloseButton();
-        if (btn) { lastClose = Date.now(); log('Clicking CLUCK YEAH', btn); btn.click(); }
+        if (btn) { lastClose = Date.now(); btn.click(); }
     }, 500);
 
-    // ================= AUTO WAKE =================
+    // ===== AUTO WAKE =====
     setInterval(() => {
         if (!stats.autoWake) return;
         const app = window.vueApp;
@@ -708,18 +640,51 @@
         if (!btn || btn.offsetParent === null) return;
         lastClick = Date.now(); wakes++; stats.wakes++; stats.spent += cost;
         save(); btn.click();
-        console.log('[Auto Wake] Clicked wake for ' + cost + ' eggs (' + wakes + '/' + MAX_WAKES + ')');
     }, 1000);
 
-    // ================= INIT =================
+    // ===== VIP AD BLOCKER =====
+    const adStyle = document.createElement('style');
+    adStyle.textContent = `[class*="vip" i],[id*="vip" i],[class*="advert" i],[id*="advert" i],[class*="promo" i],[id*="promo" i]{display:none!important}`;
+    document.head.appendChild(adStyle);
+    setInterval(() => {
+        document.querySelectorAll('[class*="vip" i],[id*="vip" i],[class*="advert" i],[class*="promo" i]').forEach(el => {
+            if (/(remove all ads|get vip|value pack|only \$)/i.test(el.textContent)) el.style.display = 'none';
+        });
+    }, 500);
+
+    // ===== UPDATE CHECKER =====
+    function checkForUpdate() {
+        fetch(RAW_URL + '?nocache=' + Date.now())
+            .then(r => r.text())
+            .then(text => {
+                const match = text.match(/@version\s+([\d.]+)/);
+                if (!match) return;
+                if (match[1] !== CURRENT_VERSION) showUpdateBanner(match[1]);
+            }).catch(() => {});
+    }
+
+    function showUpdateBanner(latest) {
+        if (document.getElementById('chw-update-banner')) return;
+        const banner = document.createElement('div');
+        banner.id = 'chw-update-banner';
+        banner.style.cssText = 'position:fixed;bottom:16px;left:10px;z-index:2147483647;background:#1b1b1b;color:#4a9eff;border:1px solid #333;border-top:2px solid #4a9eff;padding:5px 12px;font:700 10px Segoe UI,sans-serif;cursor:pointer;letter-spacing:0.5px;text-transform:uppercase;box-shadow:0 4px 12px rgba(0,0,0,0.6);transform:scale(0.72);transform-origin:bottom left';
+        banner.textContent = '⬆ Update v' + latest + ' available';
+        banner.onclick = () => window.open('https://github.com/scriptXxxx814/auto-chicken-N-winner', '_blank');
+        document.body.appendChild(banner);
+    }
+
+    setTimeout(checkForUpdate, 3000);
+    setInterval(checkForUpdate, 600000);
+
+    // ===== INIT =====
     const initInterval = setInterval(() => {
         if (!document.body) return;
         clearInterval(initInterval);
         buildMenu();
         renderMenu();
         renderLog();
-
-
+        menuVisible = true;
+        if (menu) menu.style.display = 'block';
     }, 100);
 
 })();
