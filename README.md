@@ -1,3 +1,3 @@
 # auto-chicken-N-winner
 
-DST ON TOP :P
+broken on flame guns
