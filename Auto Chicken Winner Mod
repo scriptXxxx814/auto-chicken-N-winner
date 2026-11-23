@@ -2,7 +2,7 @@
 // @name         Auto Chicken Winner Mod
 // @namespace    http://tampermonkey.net/
 // @version      6.4
-// @description  Auto Chicken Winner Mod - Mega Hack v9 style UI
+// @description  Auto Chicken Winner Mod 
 // @match        *://shellshock.io/*
 // @match        *://*.shellshock.io/*
 // @match        *://shellshockers.*/*
@@ -156,7 +156,7 @@
         #chw-menu .mh-tab {
             flex:1; padding:5px 0; text-align:center;
             font-size:10px; font-weight:700; letter-spacing:0.8px;
-            color:#666; border:none; background:transparent; cursor:pointer;
+            color:#999; border:none; background:transparent; cursor:pointer;
             text-transform:uppercase; border-bottom:2px solid transparent;
             transition:color .1s;
         }
@@ -181,9 +181,9 @@
             transition:background .1s;
         }
         #chw-menu .mh-row:hover { background:#222; }
-        #chw-menu .mh-row-label { display:flex; align-items:center; gap:5px; }
-        #chw-menu .mh-row-val { color:#fff; font-weight:600; font-size:11px; }
-        #chw-menu .mh-row-sub { color:#555; font-size:9px; }
+        #chw-menu .mh-row-label { display:flex; align-items:center; gap:5px; color:#e0e0e0; }
+        #chw-menu .mh-row-val { color:#fff; font-weight:700; font-size:11px; }
+        #chw-menu .mh-row-sub { color:#bbb; font-size:9px; }
         /* Toggle - MH style checkbox */
         #chw-menu .mh-check {
             width:13px; height:13px; border:1px solid #555;
@@ -195,9 +195,12 @@
         #chw-menu .mh-check.on::after { content:'✓'; color:#fff; font-size:9px; font-weight:900; line-height:1; }
         /* Log */
         #chw-menu .mh-log-scroll { max-height:200px; overflow-y:auto; }
-        #chw-menu .mh-log-scroll::-webkit-scrollbar { width:3px; }
-        #chw-menu .mh-log-scroll::-webkit-scrollbar-track { background:#1b1b1b; }
-        #chw-menu .mh-log-scroll::-webkit-scrollbar-thumb { background:#4a9eff; }
+        #chw-menu .mh-log-scroll { scrollbar-width:thin; scrollbar-color:#444 #111; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar { width:4px !important; background:#111 !important; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar-track { background:#111 !important; box-shadow:none !important; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar-thumb { background:#444 !important; border-radius:2px !important; border:none !important; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar-thumb:hover { background:#666 !important; }
+        #chw-menu .mh-log-scroll::-webkit-scrollbar-button { display:none !important; height:0 !important; }
         #chw-menu .mh-log-row {
             display:flex; align-items:center; justify-content:space-between;
             padding:3px 10px; border-bottom:1px solid #1e1e1e;
@@ -220,7 +223,7 @@
             transition:all .1s;
         }
         #chw-menu .mh-btn:hover { background:#4a9eff; color:#fff; border-color:#4a9eff; }
-        #chw-menu .mh-hint { font-size:9px; color:#444; letter-spacing:0.5px; text-transform:uppercase; }
+        #chw-menu .mh-hint { font-size:9px; color:#888; letter-spacing:0.5px; text-transform:uppercase; }
     `;
     document.head.appendChild(mhStyle);
 
@@ -330,18 +333,28 @@
         document.body.appendChild(menu);
 
         // Drag
+        const SCALE = 0.72;
         let drag = null;
         titlebar.addEventListener('mousedown', (e) => {
             if (e.target.classList.contains('mh-titlebar-btn')) return;
-            const r = menu.getBoundingClientRect();
-            const scale = 0.72;
-            drag = { dx: e.clientX - r.left / scale, dy: e.clientY - r.top / scale };
+            const curLeft = parseFloat(menu.style.left) || 0;
+            const curTop  = parseFloat(menu.style.top)  || 0;
+            // Store start mouse pos and start menu pos
+            drag = {
+                startX: e.clientX,
+                startY: e.clientY,
+                origLeft: curLeft,
+                origTop: curTop
+            };
             e.preventDefault();
         });
         document.addEventListener('mousemove', (e) => {
             if (!drag) return;
-            menu.style.left = (e.clientX - drag.dx) + 'px';
-            menu.style.top  = (e.clientY - drag.dy) + 'px';
+            // Divide delta by scale so 1px mouse = 1px menu movement
+            const dx = (e.clientX - drag.startX) / SCALE;
+            const dy = (e.clientY - drag.startY) / SCALE;
+            menu.style.left = (drag.origLeft + dx) + 'px';
+            menu.style.top  = (drag.origTop  + dy) + 'px';
         });
         document.addEventListener('mouseup', () => { drag = null; });
 
@@ -642,15 +655,7 @@
         save(); btn.click();
     }, 1000);
 
-    // ===== VIP AD BLOCKER =====
-    const adStyle = document.createElement('style');
-    adStyle.textContent = `[class*="vip" i],[id*="vip" i],[class*="advert" i],[id*="advert" i],[class*="promo" i],[id*="promo" i]{display:none!important}`;
-    document.head.appendChild(adStyle);
-    setInterval(() => {
-        document.querySelectorAll('[class*="vip" i],[id*="vip" i],[class*="advert" i],[class*="promo" i]').forEach(el => {
-            if (/(remove all ads|get vip|value pack|only \$)/i.test(el.textContent)) el.style.display = 'none';
-        });
-    }, 500);
+
 
     // ===== UPDATE CHECKER =====
     function checkForUpdate() {
