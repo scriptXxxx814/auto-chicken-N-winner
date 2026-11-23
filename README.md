@@ -1,3 +1,3 @@
 # auto-chicken-N-winner
 
-broken on flame guns
+bugs are fixed and Update Auto Chicken Winner Mod
