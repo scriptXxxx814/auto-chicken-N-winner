@@ -2,7 +2,7 @@
 // @name         Auto Chicken Winner Mod
 // @namespace    http://tampermonkey.net/
 // @version      6.4
-// @description  Auto Chicken Winner Mod 
+// @description  Auto Chicken Winner Mod - Mega Hack v9 style UI
 // @match        *://shellshock.io/*
 // @match        *://*.shellshock.io/*
 // @match        *://shellshockers.*/*
@@ -14,6 +14,7 @@
     'use strict';
 
     const MAX_COST        = 10000;
+    const DAILY_SPEND_LIMIT = 50000;
     const MAX_WAKES       = 100;
     const COOLDOWN_MS     = 15000;
     const OPEN_DELAY_MS   = 0;
@@ -42,7 +43,7 @@
         try { s = JSON.parse(localStorage.getItem(STORE_KEY)); } catch (e) {}
         if (!s) s = {};
         if (s.day !== today()) {
-            s = { day: today(), plays: 0, won: 0, spent: 0, wakes: 0, skins: [],
+            s = { day: today(), plays: 0, won: 0, spent: s.spent || 0, wakes: 0, skins: [],
                   chickenAuto: s.chickenAuto !== false, usedMs: 0 };
         }
         if (typeof s.usedMs !== 'number') s.usedMs = 0;
@@ -106,6 +107,109 @@
         }
         const hud = document.querySelector('#ss-hud img, .egg-count img, [class*="currency"] img');
         return hud ? hud.src : null;
+    }
+
+    // ===== THEMES =====
+    const THEMES = {
+        dark: {
+            bg:        '#1b1b1b',
+            bg2:       '#252525',
+            bg3:       '#222',
+            border:    '#111',
+            border2:   '#333',
+            titlebar:  '#2a2a2a',
+            accent:    '#4a9eff',
+            text:      '#e0e0e0',
+            textDim:   '#999',
+            textSub:   '#bbb',
+            hint:      '#888',
+            rowHover:  '#222',
+            rowBorder: '#1e1e1e',
+            checkBg:   '#1b1b1b',
+            shadow:    '4px 4px 0 #000, 0 0 0 1px #333',
+        },
+        blue: {
+            bg:        '#1a4a6b',
+            bg2:       '#1e5578',
+            bg3:       '#175070',
+            border:    '#0d3550',
+            border2:   '#2a7aaa',
+            titlebar:  '#0f3d5c',
+            accent:    '#7dd4f0',
+            text:      '#ffffff',
+            textDim:   '#9dd4ee',
+            textSub:   '#c8e8f5',
+            hint:      '#7ab8d4',
+            rowHover:  '#1e5578',
+            rowBorder: '#164a68',
+            checkBg:   '#1a4a6b',
+            shadow:    '4px 4px 0 #000, 0 0 0 1px #2a7aaa',
+        },
+        shell: {
+            bg:        '#5bbcdb',
+            bg2:       '#4aadce',
+            bg3:       '#3d9ec0',
+            border:    '#2a8aab',
+            border2:   '#7dd4f0',
+            titlebar:  '#2a9bcf',
+            accent:    '#f5a623',
+            text:      '#ffffff',
+            textDim:   '#d6f0fb',
+            textSub:   '#eaf7fd',
+            hint:      '#d0eef9',
+            rowHover:  '#4aadce',
+            rowBorder: '#3d9ec0',
+            checkBg:   '#5bbcdb',
+            shadow:    '4px 4px 0 #000, 0 0 0 1px #2a9bcf',
+        },
+    };
+
+    let currentTheme = localStorage.getItem('chwTheme') || 'dark';
+
+    function applyTheme(name) {
+        currentTheme = name;
+        localStorage.setItem('chwTheme', name);
+        const t = THEMES[name];
+        if (!menu) return;
+        const s = menu.querySelector('#chw-theme-vars');
+        if (s) s.textContent = themeVars(t);
+        // sync dropdown
+        const sel = menu && menu.querySelector('select');
+        if (sel) sel.value = name;
+    }
+
+    function themeVars(t) {
+        return `
+            #chw-menu { background:${t.bg}!important; border-color:${t.border}!important; box-shadow:${t.shadow}!important; }
+            #chw-menu .mh-titlebar { background:${t.titlebar}!important; border-color:${t.border}!important; }
+            #chw-menu .mh-titlebar-title { color:${t.text}!important; }
+            #chw-menu .mh-titlebar-ver { color:${t.textDim}!important; }
+            #chw-menu .mh-tabs { background:${t.bg3}!important; border-color:${t.border}!important; }
+            #chw-menu .mh-tab { color:${t.textDim}!important; }
+            #chw-menu .mh-tab.active { color:${t.text}!important; border-bottom-color:${t.accent}!important; }
+            #chw-menu .mh-tab:hover:not(.active) { color:${t.textSub}!important; }
+            #chw-menu .mh-section-head { background:${t.bg2}!important; border-color:${t.border}!important; color:${t.accent}!important; }
+            #chw-menu .mh-section-head span { color:${t.textDim}!important; }
+            #chw-menu .mh-row { border-color:${t.rowBorder}!important; color:${t.textSub}!important; }
+            #chw-menu .mh-row:hover { background:${t.rowHover}!important; }
+            #chw-menu .mh-row-label { color:${t.text}!important; }
+            #chw-menu .mh-row-val { color:${t.text}!important; }
+            #chw-menu .mh-row-sub { color:${t.textSub}!important; }
+            #chw-menu .mh-check { background:${t.checkBg}!important; border-color:${t.border2}!important; }
+            #chw-menu .mh-check.on { background:${t.accent}!important; border-color:${t.accent}!important; }
+            #chw-menu .mh-footer { background:${t.bg3}!important; border-color:${t.border}!important; }
+            #chw-menu .mh-btn { background:${t.bg2}!important; color:${t.textSub}!important; border-color:${t.border2}!important; }
+            #chw-menu .mh-btn:hover { background:${t.accent}!important; color:#fff!important; border-color:${t.accent}!important; }
+            #chw-menu .mh-hint { color:${t.hint}!important; }
+            #chw-menu .mh-log-row { border-color:${t.rowBorder}!important; color:${t.textSub}!important; }
+            #chw-menu .mh-log-row:nth-child(even) { background:${t.bg2}!important; }
+            #chw-menu .mh-log-left { color:${t.text}!important; }
+            #chw-menu .mh-log-time { color:${t.textDim}!important; }
+            #chw-menu .mh-empty { color:${t.textDim}!important; }
+            #chw-menu .mh-log-scroll { scrollbar-color:${t.accent} ${t.border}!important; }
+            #chw-menu .mh-log-scroll::-webkit-scrollbar-track { background:${t.border}!important; }
+            #chw-menu .mh-log-scroll::-webkit-scrollbar-thumb { background:${t.border2}!important; }
+        `;
     }
 
     const mhStyle = document.createElement('style');
@@ -302,12 +406,45 @@
         };
         paneStats.appendChild(autoRow);
 
+        // Theme section
+        const sh3 = document.createElement('div');
+        sh3.className = 'mh-section-head';
+        sh3.innerHTML = '— Theme';
+        paneStats.appendChild(sh3);
+
+        const themeRow = document.createElement('div');
+        themeRow.className = 'mh-row';
+
+        const themeLabel = document.createElement('span');
+        themeLabel.className = 'mh-row-label';
+        themeLabel.textContent = 'Theme';
+
+        const themeSelect = document.createElement('select');
+        themeSelect.style.cssText = 'background:#111;color:#ddd;border:1px solid #444;border-radius:2px;font-size:10px;font-family:Segoe UI,sans-serif;padding:2px 4px;cursor:pointer;outline:none;';
+        [['dark','Dark'],['blue','Blue'],['shell','Shell']].forEach(([val, lbl]) => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = lbl;
+            if (val === currentTheme) opt.selected = true;
+            themeSelect.appendChild(opt);
+        });
+        themeSelect.onchange = () => applyTheme(themeSelect.value);
+
+        themeRow.appendChild(themeLabel);
+        themeRow.appendChild(themeSelect);
+        paneStats.appendChild(themeRow);
+
         // Footer
         const foot = document.createElement('div');
         foot.className = 'mh-footer';
-        foot.innerHTML = '<button class="mh-btn" id="chw-reset">Reset Stats</button><span class="mh-hint">Auto Mod Active</span>';
+        foot.innerHTML = '<span class="mh-hint">Auto Mod Active</span><span class="mh-hint">Resets next day</span>';
         paneStats.appendChild(foot);
         menu.appendChild(paneStats);
+
+        // Theme vars style (injected into menu so it scopes correctly)
+        const themeVarsTag = document.createElement('style');
+        themeVarsTag.id = 'chw-theme-vars';
+        menu.appendChild(themeVarsTag);
 
         // Log pane
         paneLog = document.createElement('div');
@@ -361,9 +498,10 @@
         setTimeout(pinBelowShop, 500);
         window.addEventListener('resize', pinBelowShop);
 
-        foot.querySelector('#chw-reset').onclick = () => {
-            stats.plays=0; stats.won=0; stats.spent=0; stats.wakes=0; stats.skins=[]; stats.usedMs=0; save();
-        };
+        // Apply saved theme
+        setTimeout(() => applyTheme(currentTheme), 0);
+
+
     }
 
     function pinBelowShop() {
@@ -394,7 +532,7 @@
         statsBody.innerHTML =
             '<div class="mh-row"><span class="mh-row-label">Plays</span><span class="mh-row-val">' + stats.plays + '</span></div>' +
             '<div class="mh-row"><span class="mh-row-label">' + eggIco + ' Eggs Won</span><span class="mh-row-val">' + stats.won + '</span></div>' +
-            '<div class="mh-row"><span class="mh-row-label">' + eggIco + ' Eggs Spent</span><span class="mh-row-val">' + stats.spent + ' <span class="mh-row-sub">(' + stats.wakes + ' wakes)</span></span></div>' +
+            '<div class="mh-row"><span class="mh-row-label">' + eggIco + ' Eggs Spent</span><span class="mh-row-val">' + stats.spent + ' <span class="mh-row-sub">/ ' + DAILY_SPEND_LIMIT + ' limit · ' + stats.wakes + ' wakes' + (stats.spent >= DAILY_SPEND_LIMIT ? ' · <span style="color:#ff5f57">LIMIT HIT</span>' : '') + '</span></span></div>' +
             '<div class="mh-row"><span class="mh-row-label">Time Used</span><span class="mh-row-val">' + fmtTime(used) + '</span></div>' +
             (stats.skins.length ? '<div class="mh-row"><span class="mh-row-label">Skins Won</span><span class="mh-row-val">' + stats.skins.length + '</span></div>' : '');
     }
@@ -646,6 +784,11 @@
         const chw = app.chw;
         if (!chw.limitReached || chw.adBlockDetect) return;
         if (wakes >= MAX_WAKES) return;
+        if (stats.spent >= DAILY_SPEND_LIMIT) {
+            if (!menu._limitToastShown) { menu._limitToastShown = true; toast('Daily spend limit of ' + DAILY_SPEND_LIMIT + ' eggs reached!'); }
+            return;
+        }
+        menu._limitToastShown = false;
         if (Date.now() - lastClick < COOLDOWN_MS) return;
         const cost = 200 * ((chw.resets || 0) + 1);
         if (cost > MAX_COST) return;
