@@ -2,7 +2,7 @@
 // @name         Auto Chicken Winner Mod
 // @namespace    http://tampermonkey.net/
 // @version      6.4
-// @description  Auto Chicken Winner Mod - Mega Hack v9 style UI
+// @description  Auto Chicken Winner Mod 
 // @match        *://shellshock.io/*
 // @match        *://*.shellshock.io/*
 // @match        *://shellshockers.*/*
